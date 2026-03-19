@@ -268,6 +268,20 @@ Sessions with low technical relevance ("casual conversations") do not need to be
 
 ---
 
+## Compatibility
+
+| Platform | Status |
+|----------|--------|
+| Linux | ✅ Tested |
+| macOS | ⚠️ Should work — same paths and shell config, not formally tested |
+| Windows | ❌ Not supported — path conventions, shell config files, and `sqlite-vec` binaries differ |
+
+Windows support would require at minimum: path handling via `pathlib` across all scripts, a `GEMINI_API_KEY` fallback that reads from Windows environment variables, and a verified `sqlite-vec` Windows build.
+
+> Contributions for macOS validation and Windows support are welcome.
+
+---
+
 ## Installation
 
 ### Python dependencies

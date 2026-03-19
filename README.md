@@ -32,202 +32,245 @@ No cloud storage. No external database. Everything lives in `~/.claude/memory/`.
 - **Gemini embeddings** — `gemini-embedding-001` (3072 dimensions) for high-quality semantic retrieval
 - **Auto-rotation** — max 3 active sessions per project; older ones move to `archived/` automatically
 
-## Arquitetura
+---
+
+## How it compares
+
+| | recall | Supermemory | Claude Code native memory |
+|--|--------|-------------|--------------------------|
+| **Storage** | Local SQLite | Cloud (SaaS) | Local files |
+| **Search** | Semantic (vector embeddings) | Semantic | Manual / selective |
+| **Cross-project** | ✅ `--global` flag | ✅ | ❌ |
+| **API key required** | Gemini (embeddings only) | Yes (service) | No |
+| **Cost** | Free (Gemini free tier) | Paid plan | Free |
+| **Data privacy** | 100% local | Sent to cloud | 100% local |
+| **Claude Code integration** | Native (hooks + commands) | Via MCP | Native |
+| **Automatic saving** | ❌ manual `/recall-save` | ✅ | ❌ manual |
+
+**recall vs. Supermemory** — Supermemory is a managed service: easier to set up, but your data leaves your machine and you pay per usage. recall keeps everything local — the only external call is embedding generation via Gemini, which can be replaced with a local model (see Roadmap).
+
+**recall vs. Claude Code native memory** — Claude Code's built-in memory system is selective and manual: you explicitly tell Claude what to remember, and it writes structured notes. recall captures full session context, indexes it semantically, and lets you search across sessions and projects. They complement each other well — use native memory for permanent facts, recall for session history.
+
+---
+
+## Architecture
 
 ```
 ~/.claude/memory/
-├── memory.db          # SQLite com sqlite-vec (sessões + chunks + embeddings)
-├── archived/          # Sessões antigas (> 3 por projeto)
-└── projeto_data.json  # JSON por sessão com resumo estruturado
+├── memory.db          # SQLite + sqlite-vec (sessions, chunks, embeddings)
+├── archived/          # Older sessions (> 3 per project)
+└── project_date.json  # Structured JSON summary per session
 ```
 
-### JSON por sessão vs. banco SQLite
+### Session JSON vs. SQLite
 
-O `/recall-save` produz **dois artefatos independentes**:
+`/recall-save` produces two independent artifacts:
 
-| Artefato | Função |
-|----------|--------|
-| `projeto_data.json` | Resumo estruturado legível por humanos (título, decisões, tarefas, conceitos). Carregado pelo `/recall-load` para exibir o sumário da sessão. |
-| `memory.db` (SQLite) | Chunks + embeddings vetoriais para busca semântica. Necessário para o multi-source search funcionar. |
+| Artifact | Purpose |
+|----------|---------|
+| `project_date.json` | Human-readable structured summary (title, decisions, tasks, concepts). Loaded by `/recall-load` to display the session overview. |
+| `memory.db` (SQLite) | Chunks + vector embeddings for semantic search. Required for multi-source search to work. |
 
-O JSON é o **fallback**: se o banco falhar (Gemini API fora, sqlite-vec ausente), o resumo ainda é legível e carregável pelo `/recall-load`. Mas sem chunks no banco, a busca semântica não retorna esse conteúdo.
+The JSON is the **fallback**: if the database fails (Gemini API down, sqlite-vec missing), the summary is still readable by `/recall-load`. Without chunks in the database, semantic search won't return that content.
 
-### Banco de dados (`memory.db`)
+### Database schema (`memory.db`)
 
-| Tabela | Descrição |
-|--------|-----------|
-| `sessions` | Metadados de cada sessão (project_id, título, filename, created_at) |
-| `chunks` | Trechos de texto das sessões para busca semântica |
-| `chunk_embeddings` | Vetores de embedding via sqlite-vec (FLOAT[3072]) |
+| Table | Description |
+|-------|-------------|
+| `sessions` | Session metadata (project_id, title, filename, created_at) |
+| `chunks` | Text chunks per session for semantic search |
+| `chunk_embeddings` | Embedding vectors via sqlite-vec (FLOAT[3072]) |
 
-### Identificação de projeto
+### Project identification
 
-Usa `git remote get-url origin` como `project_id`. Fallback: raiz do repositório → diretório atual.
+Uses `git remote get-url origin` as `project_id`. Fallback: repository root → current directory.
 
 ### GEMINI_API_KEY
 
-O `db.py` lê a key automaticamente na ordem:
-1. Variável de ambiente `GEMINI_API_KEY`
+`db.py` reads the key automatically in this order:
+1. `GEMINI_API_KEY` environment variable
 2. `~/.profile`, `~/.zshrc`, `~/.bashrc`, `~/.bash_profile`
 
-Não é necessário exportar manualmente em cada sessão.
+No need to export manually in each session.
 
-## Como a orquestração funciona
+---
 
-Este é o ponto mais importante para entender o plugin — e o que mais causa confusão.
+## How orchestration works
 
-### O papel do `hooks.json`
+This is the most important part to understand — and the most common source of confusion.
 
-O `hooks.json` é o contrato com o Claude Code. Ele declara quais eventos disparam quais scripts:
+### The role of `hooks.json`
+
+`hooks.json` is the contract with Claude Code. It declares which events trigger which scripts:
 
 ```
-hooks.json → Claude Code lê → executa o comando (python3 script.py)
-                                      ↓
-                          output JSON com systemMessage
-                                      ↓
-                          Claude vê e age
+hooks.json → Claude Code reads → executes command (python3 script.py)
+                                          ↓
+                              outputs JSON with systemMessage
+                                          ↓
+                              Claude sees and acts
 ```
 
-**Sem o `hooks.json` corretamente configurado, os scripts Python não fazem nada.** O Claude Code não sabe da existência deles.
+**Without `hooks.json` correctly configured, the Python scripts do nothing.** Claude Code has no knowledge of their existence.
 
-### Dois tipos de execução
+### Two execution modes
 
-| Tipo | Como funciona |
-|------|---------------|
-| **Hooks automáticos** (`hooks.json`) | Claude Code executa o shell command no evento. O output JSON é injetado como `systemMessage` no contexto do Claude. |
-| **Comandos manuais** (`commands/*.md`) | O usuário digita `/recall-save`. Claude Code encontra o `.md` correspondente, Claude lê as instruções e as executa usando suas próprias ferramentas (Bash, Read, Write). |
+| Type | How it works |
+|------|--------------|
+| **Automatic hooks** (`hooks.json`) | Claude Code executes the shell command on the event. The JSON output is injected as `systemMessage` into Claude's context. |
+| **Manual commands** (`commands/*.md`) | User types `/recall-save`. Claude Code finds the matching `.md`, Claude reads the instructions and executes them using its own tools (Bash, Read, Write). |
 
-Em ambos os casos, **Claude é o executor final** — ou age sobre o `systemMessage` recebido do script, ou lê o `.md` e executa diretamente.
+In both cases, **Claude is the final executor** — either acting on the `systemMessage` received from the script, or reading the `.md` and executing directly.
 
-### Timeouts importam
+### Timeouts matter
 
-O `timeout` no `hooks.json` é o tempo que o Claude Code aguarda o script terminar antes de cancelar silenciosamente. Se o script chama uma API externa (Gemini), o timeout precisa ser generoso o suficiente:
+The `timeout` in `hooks.json` is how long Claude Code waits for a script to finish before silently canceling it. If the script calls an external API (Gemini), the timeout needs to be generous enough:
 
-| Hook | Timeout | Motivo |
+| Hook | Timeout | Reason |
 |------|---------|--------|
-| `SessionStart` | 10s | Só lê SQLite, sem rede |
-| `PreCompact` | 60s | Chama Gemini API para embeddings |
+| `SessionStart` | 10s | SQLite only, no network |
+| `PreCompact` | 60s | Calls Gemini API for embeddings |
 
-> Lição aprendida: o SessionStart ficou quebrando silenciosamente porque o timeout era 10s e o script chamava Gemini. Mexer só no script Python não resolvia — o gargalo estava no `hooks.json`.
+> Lesson learned: SessionStart was silently failing because the 10s timeout was too short when the script called Gemini. Fixing only the Python script didn't help — the bottleneck was in `hooks.json`.
+
+---
 
 ## Hooks
 
-| Hook | Comportamento |
-|------|---------------|
-| `SessionStart` | Lista sessões disponíveis do projeto atual. Orienta a usar `/recall-load`. Não injeta contexto automaticamente (evita latência + custo). |
-| `SessionEnd` | Sem operação. O único fluxo de salvamento é o `/recall-save` manual. |
-| `PreCompact` | Salva checkpoint + reinjeção de contexto crítico via multi-source antes da compactação. |
+| Hook | Behavior |
+|------|----------|
+| `SessionStart` | Lists available sessions for the current project. Prompts to use `/recall-load`. Does not inject context automatically (avoids latency + cost). |
+| `SessionEnd` | No-op. The only save flow is manual `/recall-save`. |
+| `PreCompact` | Reinjects critical context via multi-source search before context window compression. |
 
-> **Importante**: `SessionEnd` não recebe o transcript do Claude Code — limitação da plataforma. Por isso, o resumo com Gemini Flash só é gerado pelo `/recall-save` manual.
+> **Note**: `SessionEnd` does not receive the conversation transcript — platform limitation. This is why Gemini Flash summarization is only possible via the manual `/recall-save`.
 
-## Comandos
+---
 
-### `/recall-save [nota opcional]`
+## Commands
 
-Salva a sessão atual:
-1. Gera resumo estruturado via Gemini Flash (título, decisões, tarefas, conceitos, arquivos, notas)
-2. Salva JSON em `~/.claude/memory/projeto_data.json`
-3. Indexa chunks com embeddings no SQLite
-4. Rotaciona sessões se necessário (máx. 3 ativas)
+### `/recall-save [optional note]`
 
-### `/recall-load [número | query | --global query]`
+Saves the current session:
+1. Generates structured summary via Gemini Flash (title, decisions, tasks, concepts, files, notes)
+2. Saves JSON to `~/.claude/memory/project_date.json`
+3. Chunks + indexes embeddings in SQLite
+4. Rotates sessions if needed (max 3 active)
 
-Recupera contexto de sessões anteriores:
-- Sem argumento: lista sessões do projeto atual
-- Com número: carrega sessão específica
-- Com texto: busca semântica no projeto atual
-- `--global "query"`: busca semântica em **todos os projetos** (cross-project)
+### `/recall-load [number | query | --global query]`
 
-O comando executa **multi-source search**: para cada sessão, retorna os `top_k` chunks mais relevantes — garantindo que todas as sessões contribuam, não só a maior.
+Restores context from previous sessions:
+- No argument: lists sessions for the current project
+- Number: loads a specific session
+- Text: semantic search in the current project
+- `--global "query"`: semantic search across **all projects** (cross-project)
 
-No modo `--global`, os resultados são ordenados por score e filtrados por threshold mínimo de `0.6` para evitar ruído entre projetos. Cada resultado inclui o `project_id` de origem.
+Runs **multi-source search**: for each session, returns the `top_k` most relevant chunks — ensuring all sessions contribute, not just the largest one.
 
-O resumo estruturado é carregado da sessão mais recente que tenha dados reais (ignora sessões fallback sem resumo).
+In `--global` mode, results are sorted by score and filtered by a minimum threshold of `0.6` to avoid cross-project noise. Each result includes the source `project_id`.
 
-## Integração com CLAUDE.md global
+---
 
-Para que o Claude use o plugin automaticamente em qualquer sessão sem precisar ser instruído, adicione ao `~/.claude/CLAUDE.md`:
+## CLAUDE.md integration
+
+To make Claude use the plugin automatically in any session without being instructed, add to `~/.claude/CLAUDE.md`:
 
 ```markdown
 ## Plugin: recall
 
-Memória persistente entre sessões via SQLite + embeddings Gemini. Sempre disponível em qualquer projeto.
+Persistent memory across sessions via SQLite + Gemini embeddings. Always available in any project.
 
-**Comandos:**
-- `/recall-load` — lista sessões do projeto atual
-- `/recall-load 1` — carrega sessão por número
-- `/recall-load "query"` — busca semântica no projeto atual
-- `/recall-load --global "query"` — busca semântica em todos os projetos (cross-project)
-- `/recall-save` — salva sessão atual com resumo Gemini + embeddings
+**Commands:**
+- `/recall-load` — list sessions for the current project
+- `/recall-load 1` — load session by number
+- `/recall-load "query"` — semantic search in the current project
+- `/recall-load --global "query"` — semantic search across all projects
+- `/recall-save` — save current session with Gemini summary + embeddings
 
-**Quando usar sem o usuário pedir:**
-- No início de sessões de desenvolvimento, se o usuário retomar um trabalho em andamento, sugira `/recall-load` antes de começar
-- Se o usuário mencionar algo que pode ter contexto em sessões anteriores, use `/recall-load --global "query"` para buscar
+**When to use proactively:**
+- At the start of a development session, if the user is resuming work, suggest `/recall-load`
+- If the user mentions something that may have context in previous sessions, use `/recall-load --global "query"` to search
 
-**Implementação (path do plugin):**
-\`\`\`
+**Implementation path:**
 ~/.claude/plugins/cache/local/recall/1.0.0/hooks/db.py
-\`\`\`
-Funções principais: `get_db()`, `init_db()`, `get_project_id()`, `get_active_sessions()`, `multi_source_search()`.
 
-`multi_source_search(conn, query, project_id=None, top_k_per_session=2)` — `project_id=None` ativa modo cross-project com threshold de score 0.6.
+Key functions: get_db(), init_db(), get_project_id(), get_active_sessions(), multi_source_search().
+multi_source_search(conn, query, project_id=None, top_k_per_session=2) — project_id=None enables cross-project mode with score threshold 0.6.
 ```
 
-Isso elimina a necessidade de explicar o plugin a cada nova sessão.
+This eliminates the need to explain the plugin at the start of every session.
 
-## Fluxo típico de uso
+**Tip — automatic context loading via CLAUDE.md:**
 
-```
-# Início da sessão
-/recall-load          # vê sessões disponíveis
-/recall-load 1        # carrega a mais recente
+Claude Code always reads `CLAUDE.md` before starting any session. You can use this to make Claude run `/recall-load` automatically, without waiting for you to ask:
 
-# ... trabalho ...
-
-# Fim da sessão
-/recall-save          # salva com resumo Gemini
+```markdown
+At the start of each session, analyze the user's first message and run
+/recall-load "query" with a 5-10 word semantic query derived from what
+they are asking — before responding.
 ```
 
-> **Por que salvar manualmente?** O `SessionEnd` não recebe o transcript da conversa — limitação da plataforma. Sem o transcript, não é possível gerar embeddings nem indexar chunks. O `/recall-save` deve ser executado **antes de fechar a sessão**, enquanto o contexto ainda está disponível. O `SessionEnd` não faz nada por design.
+This bridges the gap between "session just opened" and "meaningful query available" — the reason SessionStart doesn't auto-inject context by default.
 
-> **O RAG filtra por você:** não há necessidade de ser seletivo sobre quais sessões salvar. Conversas de baixa relevância técnica terão score baixo na busca semântica e simplesmente não aparecerão. Salve tudo.
+---
 
-## Testes e métricas
+## Typical workflow
 
-Resultados de testes realizados em sessão real (2026-03-19), projeto `blue-new-layout` (Next.js 16):
+```
+# Start of session
+/recall-load          # see available sessions
+/recall-load 1        # load the most recent
 
-### Embeddings e busca
+# ... work ...
 
-| Teste | Resultado |
-|-------|-----------|
-| Leitura de `GEMINI_API_KEY` via arquivos de config (`~/.zshrc`) | ✅ Funcionou sem exportar manualmente |
-| Geração de embeddings com `gemini-embedding-001` | ✅ 3072 dimensões por chunk |
-| Multi-source search entre múltiplas sessões | ✅ Scoring semântico correto, sessões com conteúdo relevante priorizadas |
-| Busca semântica cross-project (`project_id=None`) | ✅ Retorna chunks de todos os projetos, ordenados por score, filtrados por threshold 0.6 |
+# End of session
+/recall-save          # save with Gemini summary
+```
+
+> **Why save manually?** `SessionEnd` does not receive the conversation transcript — platform limitation. Without the transcript, generating embeddings and indexing chunks is impossible. Run `/recall-save` **before closing the session**, while the context is still available.
+
+> **The RAG filters for you:** no need to be selective about which sessions to save. Low-relevance conversations will score near zero against technical queries and simply won't appear. Save everything.
+
+---
+
+## Tests and metrics
+
+Results from real session tests (2026-03-19), project `blue-new-layout` (Next.js 16):
+
+### Embeddings and search
+
+| Test | Result |
+|------|--------|
+| Reading `GEMINI_API_KEY` from shell config (`~/.zshrc`) | ✅ Worked without manual export |
+| Embedding generation with `gemini-embedding-001` | ✅ 3072 dimensions per chunk |
+| Multi-source search across multiple sessions | ✅ Correct semantic scoring, relevant sessions prioritized |
+| Cross-project semantic search (`project_id=None`) | ✅ Returns chunks from all projects, sorted by score, filtered by threshold 0.6 |
 
 ### Hooks
 
-| Hook | Teste | Resultado |
-|------|-------|-----------|
-| `SessionStart` | Listagem de sessões do projeto | ✅ Sessões exibidas corretamente |
-| `PreCompact` | Autocompact disparou imediatamente após correção do hook | ✅ Hook executou; retornou silencioso pois não havia sessões indexadas previamente (comportamento esperado) |
-| `SessionEnd` | Hook removido — sem operação | ✅ Sem sessões fantasma no banco |
+| Hook | Test | Result |
+|------|------|--------|
+| `SessionStart` | Session listing for project | ✅ Sessions displayed correctly |
+| `PreCompact` | Autocompact fired immediately after hook fix | ✅ Hook executed; returned silent (no previously indexed sessions — expected behavior) |
+| `SessionEnd` | Hook removed — no-op | ✅ No ghost sessions in database |
 
-### Limitações confirmadas em teste
+### Confirmed limitations
 
-| Limitação | Causa | Impacto |
-|-----------|-------|---------|
-| `PreCompact` não injeta contexto em sessões virgens | Sem chunks indexados previamente, multi-source retorna vazio | Baixo — contexto nativo do Claude Code supre a sessão atual |
-| `SessionEnd` não indexa chunks automaticamente | Plataforma não passa transcript via stdin | Sem impacto — fallback removido, `/recall-save` é o único fluxo |
-| `SessionStart` não injeta contexto automaticamente | Sem query de busca no início da sessão, RAG não tem direção | Baixo — design intencional; `/recall-load` com query específica é mais preciso |
+| Limitation | Cause | Impact |
+|------------|-------|--------|
+| `PreCompact` does not inject context on first session | No previously indexed chunks — multi-source returns empty | Low — Claude Code's native context covers the current session |
+| `SessionEnd` does not auto-index chunks | Platform does not pass transcript via stdin | None — fallback removed, `/recall-save` is the only flow |
+| `SessionStart` does not auto-inject context | No search query available at session start | Low — intentional design; `/recall-load` with a specific query is more precise |
 
-### Observação sobre o RAG
+### Note on the RAG
 
-Sessões com conteúdo de baixa relevância técnica ("conversas informais") não precisam ser excluídas manualmente. Em testes com banco misto, chunks irrelevantes tiveram score de similaridade próximo de zero contra queries técnicas — o modelo de embedding descarta naturalmente o que não é pertinente.
+Sessions with low technical relevance ("casual conversations") do not need to be manually excluded. In tests with a mixed database, irrelevant chunks scored near zero against technical queries — the embedding model naturally discards what isn't pertinent.
 
-## Instalação
+---
 
-### Dependências Python
+## Installation
+
+### Python dependencies
 
 ```bash
 pip install sqlite-vec google-genai
@@ -235,97 +278,107 @@ pip install sqlite-vec google-genai
 
 ### GEMINI_API_KEY
 
-Adicione ao `~/.profile` (disponível em todos os shells, incluindo hooks):
+Add to `~/.profile` (available in all shells, including hooks):
 
 ```bash
-export GEMINI_API_KEY=sua_chave_aqui
+export GEMINI_API_KEY=your_key_here
 ```
 
-### Registro do plugin
+### Plugin registration
 
-O plugin deve estar em:
+The plugin must be placed at:
 ```
 ~/.claude/plugins/cache/local/recall/1.0.0/
 ```
 
-> O Claude Code executa plugins do diretório `cache/local/`, não do `marketplaces/local/`. Após editar arquivos no marketplace, sincronize manualmente com `cp`.
+> Claude Code executes plugins from the `cache/local/` directory, not `marketplaces/local/`. After editing files in the marketplace, sync manually with `cp`.
 
-## Estrutura de arquivos
+---
+
+## File structure
 
 ```
 recall/
 ├── plugin.json
 ├── README.md
 ├── LICENSE
-├── FLUXO-ATUAL.md         # Documentação técnica detalhada
+├── FLUXO-ATUAL.md         # Detailed technical documentation
 ├── commands/
 │   ├── recall-save.md
 │   └── recall-load.md
 ├── hooks/
 │   ├── hooks.json
-│   ├── db.py              # Módulo compartilhado: SQLite, embeddings, multi-source
+│   ├── db.py              # Shared module: SQLite, embeddings, multi-source search
 │   ├── session-start.py
 │   ├── session-end.py
 │   ├── pre-compact.py
-│   └── recall_save_cmd.py # Pipeline do /recall-save
+│   └── recall_save_cmd.py # Pipeline for /recall-save
 ```
 
-## Modo debug
+---
 
-Os hooks falham silenciosamente por design — erros não devem interromper o fluxo do usuário. Para investigar problemas, ative o modo debug:
+## Debug mode
+
+Hooks fail silently by design — errors should not interrupt the user's workflow. To investigate issues, enable debug mode:
 
 ```bash
 export RECALL_DEBUG=1
 ```
 
-Ou adicione ao `~/.profile` para persistir entre sessões. Com o modo ativo, todos os erros são registrados em:
+Or add to `~/.profile` to persist across sessions. When active, all errors are logged to:
 
 ```
 ~/.claude/memory/debug.log
 ```
 
-O log inclui timestamp, hook de origem e traceback completo:
+The log includes timestamp, hook source, and full traceback:
 
 ```
-[2026-03-13 21:18:20] [session-start] Erro ao listar sessões
+[2026-03-13 21:18:20] [session-start] Failed to list sessions
 Traceback (most recent call last):
   ...
 ```
 
-Para limpar o log: `rm ~/.claude/memory/debug.log`
+To clear the log: `rm ~/.claude/memory/debug.log`
 
-## Problemas conhecidos e soluções
+---
 
-| Problema | Causa | Solução |
-|----------|-------|---------|
-| `GEMINI_API_KEY` não disponível nos hooks | Hooks rodam em shell não-interativo (não carrega `~/.zshrc`) | `db.py` lê a key diretamente dos arquivos de config |
-| Cache desatualizado após editar marketplace | Claude Code usa `cache/local/` como fonte real | Sincronizar com `cp` após cada edição |
-| SessionEnd não gera resumo | Plataforma não passa transcript via stdin | Hook removido — `/recall-save` é o único fluxo de salvamento |
-| SessionStart falhando silenciosamente | Timeout de 10s insuficiente quando script chamava Gemini | Script simplificado (só SQLite) + timeout calibrado por hook em `hooks.json` |
-| Multi-source retornando só última sessão | Sessões fallback têm 0 chunks (sem indexação) | Esperado — `recall-load` filtra pela sessão com resumo real |
+## Known issues and solutions
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| `GEMINI_API_KEY` not available in hooks | Hooks run in non-interactive shell (doesn't load `~/.zshrc`) | `db.py` reads the key directly from config files |
+| Stale cache after editing marketplace | Claude Code uses `cache/local/` as the real source | Sync with `cp` after each edit |
+| `SessionEnd` doesn't generate summary | Platform doesn't pass transcript via stdin | Hook removed — `/recall-save` is the only save flow |
+| `SessionStart` failing silently | 10s timeout too short when script called Gemini | Script simplified (SQLite only) + timeout calibrated per hook in `hooks.json` |
+| Multi-source returning only last session | Sessions without `/recall-save` have 0 chunks | Expected — `/recall-load` filters for sessions with real summaries |
+
+---
 
 ## Roadmap
 
-### Modelo de embedding local
+### Local embedding model
 
-Atualmente o plugin depende da Gemini API para geração de embeddings — o único componente que exige rede e chave de API. O objetivo de longo prazo é suportar modelos locais como alternativa:
+The plugin currently depends on the Gemini API for embedding generation — the only component that requires network and an API key. The long-term goal is to support local models as an alternative:
 
-- **[`nomic-embed-text`](https://ollama.com/library/nomic-embed-text)** via Ollama — 768 dimensões, roda 100% offline
-- **[`mxbai-embed-large`](https://ollama.com/library/mxbai-embed-large)** via Ollama — 1024 dimensões, melhor qualidade
-- **`sentence-transformers`** via Python direto — sem dependência de servidor
+- **[`nomic-embed-text`](https://ollama.com/library/nomic-embed-text)** via Ollama — 768 dimensions, fully offline
+- **[`mxbai-embed-large`](https://ollama.com/library/mxbai-embed-large)** via Ollama — 1024 dimensions, better quality
+- **`sentence-transformers`** via Python directly — no server dependency
 
-A troca seria configurável em `db.py`, mantendo a interface de `get_embedding()` idêntica. O banco SQLite já suporta qualquer dimensão via `sqlite-vec` — a única mudança seria reindexar sessões existentes ao trocar de modelo.
+The switch would be configurable in `db.py`, keeping the `get_embedding()` interface identical. The SQLite database already supports any dimension via `sqlite-vec` — the only change would be re-indexing existing sessions when switching models.
 
-### Configuração de chave de API sem path do sistema
+### API key configuration without system path
 
-Atualmente a `GEMINI_API_KEY` é lida diretamente dos arquivos de config do shell (`~/.profile`, `~/.zshrc`, etc.) — solução funcional mas acoplada ao sistema de arquivos. O objetivo é suportar formas mais portáveis de configuração:
+Currently `GEMINI_API_KEY` is read directly from shell config files (`~/.profile`, `~/.zshrc`, etc.) — functional but coupled to the filesystem. The goal is to support more portable configuration options:
 
-- **Arquivo de config do plugin** — ex: `~/.claude/recall.json` com `{ "gemini_api_key": "..." }`
-- **Variável via Claude Code settings** — configurar a key direto no `settings.json` do Claude Code
-- **Prompt interativo** — solicitar a key na primeira execução e armazenar de forma segura
+- **Plugin config file** — e.g. `~/.claude/recall.json` with `{ "gemini_api_key": "..." }`
+- **Claude Code settings variable** — configure the key directly in Claude Code's `settings.json`
+- **Interactive prompt** — request the key on first run and store it securely
 
-> Contribuições bem-vindas. O ponto de entrada é a função `_get_gemini_api_key()` em `hooks/db.py`.
+> Contributions welcome. The entry point is the `_get_gemini_api_key()` function in `hooks/db.py`.
 
-## Licença
+---
+
+## License
 
 MIT

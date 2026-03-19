@@ -1,0 +1,13 @@
+{
+  "name": "recall",
+  "description": "Memória persistente e semântica entre sessões do Claude Code",
+  "version": "1.0.0",
+  "author": {
+    "name": "Claude Code",
+    "email": "claude@anthropic.com"
+  },
+  "homepage": "",
+  "repository": "",
+  "license": "MIT",
+  "keywords": ["memory", "context", "session", "graph", "persistence"]
+}

@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code internal
+hooks/.claude/
+
+# OS
+.DS_Store

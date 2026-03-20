@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "Memória persistente e semântica entre sessões do Claude Code",
   "author": {
-    "name": "Claude Code",
-    "email": "claude@anthropic.com"
+    "name": "altvora",
+    "email": "altvoratech@gmail.com"
   },
   "keywords": ["memory", "context", "session", "graph", "persistence"]
 }

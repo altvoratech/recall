@@ -1,5 +1,5 @@
 ---
-name: memory-load
+name: recall-load
 description: Carrega memória de sessões anteriores via busca multi-source no SQLite + sqlite-vec
 argument-hint: "[número da sessão | query de busca]"
 allowed-tools: [Read, Bash, AskUserQuestion]

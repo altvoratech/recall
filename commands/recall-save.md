@@ -1,5 +1,5 @@
 ---
-name: memory-save
+name: recall-save
 description: Salva memória da sessão atual — resume via Gemini, indexa no SQLite + sqlite-vec
 argument-hint: "[nota opcional sobre o que está sendo salvo]"
 allowed-tools: [Read, Write, Bash]

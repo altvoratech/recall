@@ -6,6 +6,5 @@
     "name": "Claude Code",
     "email": "claude@anthropic.com"
   },
-  "keywords": ["memory", "context", "session", "graph", "persistence"],
-  "hooks": "./hooks/hooks.json"
+  "keywords": ["memory", "context", "session", "graph", "persistence"]
 }

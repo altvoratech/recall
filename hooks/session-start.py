@@ -29,10 +29,32 @@ def main():
         sessions = get_active_sessions(conn, project_id)
         conn.close()
 
+        # Instructions for Claude (injected into context, not visible to user)
+        context_lines = [
+            'Plugin recall is active. Persistent semantic memory across sessions.',
+            'Commands: /recall-load (search sessions), /recall-save (save current session).',
+            '/recall-load "query" — hybrid search in current project.',
+            '/recall-load --global "query" — search across all projects.',
+            f'Project: {project_slug}. Sessions available: {len(sessions)}.',
+        ]
+        if sessions:
+            context_lines.append(f'Most recent: {sessions[0]["title"]}')
+        context_lines.append('Suggest /recall-load when user resumes work or references past sessions.')
+        context_lines.append('Suggest /recall-save before user ends the session.')
+        additional_context = ' '.join(context_lines)
+
         if not sessions:
-            print(json.dumps({'continue': True, 'suppressOutput': True}))
+            print(json.dumps({
+                'continue': True,
+                'suppressOutput': True,
+                'hookSpecificOutput': {
+                    'hookEventName': 'SessionStart',
+                    'additionalContext': additional_context
+                }
+            }))
             return
 
+        # Notification for the user (visible in UI)
         lines = [f'🧠 Memória disponível para **{project_slug}**:\n']
         for i, s in enumerate(sessions, 1):
             lines.append(f'  {i}. {s["title"]}')
@@ -44,7 +66,11 @@ def main():
         print(json.dumps({
             'continue': True,
             'suppressOutput': False,
-            'systemMessage': message
+            'systemMessage': message,
+            'hookSpecificOutput': {
+                'hookEventName': 'SessionStart',
+                'additionalContext': additional_context
+            }
         }))
 
     except Exception as e:

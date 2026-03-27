@@ -1,5 +1,5 @@
 {
-  "description": "recall - Memória semântica persistente com SQLite + Gemini embeddings",
+  "description": "recall - Memória semântica persistente com SQLite + FTS5 hybrid search + fastembed local",
   "hooks": {
     "SessionStart": [
       {

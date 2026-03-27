@@ -1,6 +1,6 @@
 ---
 name: recall-load
-description: Carrega memória de sessões anteriores via busca multi-source no SQLite + sqlite-vec
+description: Carrega memória de sessões anteriores via hybrid search (FTS5 + sqlite-vec) com embeddings locais
 argument-hint: "[número da sessão | query de busca]"
 allowed-tools: [Read, Bash, AskUserQuestion]
 ---
@@ -27,7 +27,7 @@ Banco: `~/.claude/memory/memory.db`
 
 ## Implementação
 
-> O `db.py` lê `GEMINI_API_KEY` automaticamente dos arquivos de config do shell (`~/.profile`, `~/.zshrc`, etc.) — não é necessário passá-la explicitamente.
+> O `db.py` usa embeddings locais via fastembed (BAAI/bge-small-en-v1.5) — nenhuma API key necessária.
 
 ### 1. Listar sessões disponíveis (`/recall-load` sem argumento)
 
@@ -188,4 +188,4 @@ Notas: contexto adicional...
 
 - **Banco não encontrado**: Informa que não há memória salva e orienta a usar `/recall-save`
 - **Sem sessões do projeto**: Exibe todas as sessões disponíveis de outros projetos para escolha manual
-- **GEMINI_API_KEY ausente**: Lista sessões sem busca semântica, carrega JSON diretamente
+- **fastembed não instalado**: Orienta a instalar com `pip install fastembed sqlite-vec`

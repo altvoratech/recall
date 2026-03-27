@@ -1,6 +1,6 @@
 ---
 name: recall-save
-description: Salva memória da sessão atual — resume via Gemini, indexa no SQLite + sqlite-vec
+description: Salva memória da sessão atual — indexa no SQLite + sqlite-vec + FTS5 com embeddings locais (fastembed)
 argument-hint: "[nota opcional sobre o que está sendo salvo]"
 allowed-tools: [Read, Write, Bash]
 ---

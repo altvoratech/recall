@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 recall-save command pipeline — called by /recall-save.
-Saves session JSON, indexes chunks with Gemini embeddings.
+Saves session JSON, indexes chunks with local embeddings (fastembed).
 """
 
 import argparse
@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from db import (
     get_db, init_db, get_project_id, rotate_sessions,
-    save_session_metadata, index_chunks, MEMORY_DIR
+    save_session_metadata, index_chunks, chunk_structured, MEMORY_DIR
 )
 
 
@@ -78,14 +78,9 @@ def main():
     # Salva metadados no SQLite
     save_session_metadata(conn, session_id, project_id, args.cwd, filename, title)
 
-    # Indexa chunks
-    full_text = f"{title}\n\n"
-    full_text += '\n'.join(summary.get('decisions', []))
-    full_text += '\n'.join(summary.get('tasks_pending', []))
-    full_text += '\n'.join(summary.get('concepts', []))
-    full_text += f"\n{summary.get('notes', '')}"
-
-    index_chunks(conn, session_id, full_text)
+    # Indexa chunks usando chunking semântico (por seção lógica)
+    chunks = chunk_structured(summary)
+    index_chunks(conn, session_id, '', precomputed_chunks=chunks)
     conn.close()
 
     print(json.dumps({

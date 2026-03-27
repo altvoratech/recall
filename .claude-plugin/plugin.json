@@ -1,10 +1,9 @@
 {
   "name": "recall",
   "version": "1.0.0",
-  "description": "Memória persistente e semântica entre sessões do Claude Code",
+  "description": "Memória persistente e semântica entre sessões do Claude Code — hybrid search (FTS5 + sqlite-vec) com embeddings locais",
   "author": {
-    "name": "altvora",
-    "email": "altvoratech@gmail.com"
+    "name": "altvoratech"
   },
   "keywords": ["memory", "context", "session", "graph", "persistence"]
 }

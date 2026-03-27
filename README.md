@@ -2,7 +2,7 @@
 
 > Persistent semantic memory for Claude Code — no more starting from scratch every session.
 
-**recall** gives Claude Code long-term memory across sessions using local SQLite + vector embeddings. Save a session, search it later — by project or across all your projects at once.
+**recall** gives Claude Code long-term memory across sessions using local SQLite + hybrid search (FTS5 keyword + vector embeddings via RRF). Save a session, search it later — by project or across all your projects at once.
 
 ```
 /recall-save        → summarize + index the current session
@@ -16,20 +16,25 @@
 
 Claude Code forgets everything when you close a session. recall solves this with a local-first pipeline:
 
-1. `/recall-save` — generates a structured summary via Gemini Flash, chunks it, and indexes embeddings in SQLite
-2. `/recall-load` — does semantic search over indexed sessions using cosine similarity
+1. `/recall-save` — Claude generates a structured summary, chunks it, and indexes embeddings + FTS5 locally in SQLite
+2. `/recall-load` — hybrid search (semantic + keyword) over indexed sessions using Reciprocal Rank Fusion (RRF)
 3. **PreCompact hook** — automatically reinjects critical context before Claude's context window compresses
 
-No cloud storage. No external database. Everything lives in `~/.claude/memory/`.
+No cloud storage. No external database. No API calls. Everything lives in `~/.claude/memory/`.
 
 ---
 
 ## Features
 
-- **Local and offline-first** — SQLite + sqlite-vec, zero external dependencies at runtime
+- **Fully local and offline** — SQLite + sqlite-vec + FTS5 + fastembed, zero API calls, zero cost
+- **Hybrid search** — combines FTS5 keyword matching with vector cosine similarity via Reciprocal Rank Fusion (RRF) — exact terms AND semantic meaning
+- **Semantic chunking** — chunks by logical section (decisions, tasks, concepts, notes) instead of fixed word count — each chunk is a coherent unit
+- **Metadata filtering** — pre-filter by section type (`decisions`, `concepts`, etc.) or by date range (`days_back`) before vector search
+- **Query expansion** — domain-specific synonyms (PT/EN) expand search terms automatically (e.g. "deploy api" → "deploy OR implantação OR deployment")
+- **Recency re-ranking** — exponential decay boosts recent sessions (half-life: 14 days) — blended score: 80% similarity + 20% recency
 - **Multi-source search** — guaranteed slots per session (inspired by NotebookLM) — prevents larger sessions from drowning out older ones
 - **Cross-project search** — `/recall-load --global "query"` searches across all indexed projects with a relevance threshold
-- **Gemini embeddings** — `gemini-embedding-001` (3072 dimensions) for high-quality semantic retrieval
+- **Local embeddings** — `BAAI/bge-small-en-v1.5` via fastembed (384 dimensions, ONNX runtime) — fast, free, no network required
 - **Auto-rotation** — max 3 active sessions per project; older ones move to `archived/` automatically
 
 ---
@@ -39,15 +44,16 @@ No cloud storage. No external database. Everything lives in `~/.claude/memory/`.
 | | recall | Supermemory | Claude Code native memory |
 |--|--------|-------------|--------------------------|
 | **Storage** | Local SQLite | Cloud (SaaS) | Local files |
-| **Search** | Semantic (vector embeddings) | Semantic | Manual / selective |
+| **Search** | Hybrid (semantic + keyword via RRF) | Semantic | Manual / selective |
 | **Cross-project** | ✅ `--global` flag | ✅ | ❌ |
-| **API key required** | Gemini (embeddings only) | Yes (service) | No |
-| **Cost** | Free (Gemini free tier) | Paid plan | Free |
+| **API key required** | No | Yes (service) | No |
+| **Cost** | Free | Paid plan | Free |
 | **Data privacy** | 100% local | Sent to cloud | 100% local |
+| **Network required** | No (fully offline) | Yes | No |
 | **Claude Code integration** | Native (hooks + commands) | Via MCP | Native |
 | **Automatic saving** | ❌ manual `/recall-save` | ✅ | ❌ manual |
 
-**recall vs. Supermemory** — Supermemory is a managed service: easier to set up, but your data leaves your machine and you pay per usage. recall keeps everything local — the only external call is embedding generation via Gemini, which can be replaced with a local model (see Roadmap).
+**recall vs. Supermemory** — Supermemory is a managed service: easier to set up, but your data leaves your machine and you pay per usage. recall is 100% local and offline — embeddings are generated locally via fastembed (ONNX), no API calls, no cost.
 
 **recall vs. Claude Code native memory** — Claude Code's built-in memory system is selective and manual: you explicitly tell Claude what to remember, and it writes structured notes. recall captures full session context, indexes it semantically, and lets you search across sessions and projects. They complement each other well — use native memory for permanent facts, recall for session history.
 
@@ -71,27 +77,26 @@ No cloud storage. No external database. Everything lives in `~/.claude/memory/`.
 | `project_date.json` | Human-readable structured summary (title, decisions, tasks, concepts). Loaded by `/recall-load` to display the session overview. |
 | `memory.db` (SQLite) | Chunks + vector embeddings for semantic search. Required for multi-source search to work. |
 
-The JSON is the **fallback**: if the database fails (Gemini API down, sqlite-vec missing), the summary is still readable by `/recall-load`. Without chunks in the database, semantic search won't return that content.
+The JSON is the **fallback**: if the database fails (sqlite-vec missing), the summary is still readable by `/recall-load`. Without chunks in the database, hybrid search won't return that content.
 
 ### Database schema (`memory.db`)
 
 | Table | Description |
 |-------|-------------|
 | `sessions` | Session metadata (project_id, title, filename, created_at) |
-| `chunks` | Text chunks per session for semantic search |
-| `chunk_embeddings` | Embedding vectors via sqlite-vec (FLOAT[3072]) |
+| `chunks` | Text chunks per session with `section_type` metadata (decisions, concepts, tasks, notes) |
+| `chunk_embeddings` | Embedding vectors via sqlite-vec (FLOAT[384]) |
+| `chunks_fts` | FTS5 full-text index (external content table pointing to `chunks`) |
 
 ### Project identification
 
 Uses `git remote get-url origin` as `project_id`. Fallback: repository root → current directory.
 
-### GEMINI_API_KEY
+### Embedding model
 
-`db.py` reads the key automatically in this order:
-1. `GEMINI_API_KEY` environment variable
-2. `~/.profile`, `~/.zshrc`, `~/.bashrc`, `~/.bash_profile`
+Embeddings are generated locally using [`fastembed`](https://github.com/qdrant/fastembed) with the `BAAI/bge-small-en-v1.5` model (384 dimensions, ONNX runtime). No API key or network connection required.
 
-No need to export manually in each session.
+The model is downloaded automatically on first use (~50MB) and cached locally.
 
 ---
 
@@ -124,14 +129,12 @@ In both cases, **Claude is the final executor** — either acting on the `system
 
 ### Timeouts matter
 
-The `timeout` in `hooks.json` is how long Claude Code waits for a script to finish before silently canceling it. If the script calls an external API (Gemini), the timeout needs to be generous enough:
+The `timeout` in `hooks.json` is how long Claude Code waits for a script to finish before silently canceling it. The timeout needs to be generous enough for embedding generation:
 
 | Hook | Timeout | Reason |
 |------|---------|--------|
-| `SessionStart` | 10s | SQLite only, no network |
-| `PreCompact` | 60s | Calls Gemini API for embeddings |
-
-> Lesson learned: SessionStart was silently failing because the 10s timeout was too short when the script called Gemini. Fixing only the Python script didn't help — the bottleneck was in `hooks.json`.
+| `SessionStart` | 10s | SQLite only, lightweight |
+| `PreCompact` | 60s | Generates local embeddings + similarity search |
 
 ---
 
@@ -143,7 +146,7 @@ The `timeout` in `hooks.json` is how long Claude Code waits for a script to fini
 | `SessionEnd` | No-op. The only save flow is manual `/recall-save`. |
 | `PreCompact` | Reinjects critical context via multi-source search before context window compression. |
 
-> **Note**: `SessionEnd` does not receive the conversation transcript — platform limitation. This is why Gemini Flash summarization is only possible via the manual `/recall-save`.
+> **Note**: `SessionEnd` does not receive the conversation transcript — platform limitation. This is why saving is only possible via the manual `/recall-save`.
 
 ---
 
@@ -154,10 +157,10 @@ The `timeout` in `hooks.json` is how long Claude Code waits for a script to fini
 Saves the current session:
 1. Claude analyzes the conversation and generates a structured summary (title, decisions, tasks, concepts, files, notes)
 2. Saves JSON to `~/.claude/memory/project_date.json`
-3. Chunks the summary and indexes embeddings via Gemini in SQLite
+3. Chunks the summary and indexes embeddings locally in SQLite
 4. Rotates sessions if needed (max 3 active)
 
-> **Note:** The summary is generated by Claude itself — Gemini is only used for embedding generation, not summarization.
+> **Note:** The summary is generated by Claude itself. Embeddings are generated locally via fastembed — no external API calls.
 
 ### `/recall-load [number | query | --global query]`
 
@@ -167,7 +170,7 @@ Restores context from previous sessions:
 - Text: semantic search in the current project
 - `--global "query"`: semantic search across **all projects** (cross-project)
 
-Runs **multi-source search**: for each session, returns the `top_k` most relevant chunks — ensuring all sessions contribute, not just the largest one.
+Runs **hybrid multi-source search**: for each session, combines FTS5 keyword matches with vector similarity via RRF, then returns the `top_k` most relevant chunks — ensuring all sessions contribute, not just the largest one.
 
 In `--global` mode, results are sorted by score and filtered by a minimum threshold of `0.6` to avoid cross-project noise. Each result includes the source `project_id`.
 
@@ -180,14 +183,14 @@ To make Claude use the plugin automatically in any session without being instruc
 ```markdown
 ## Plugin: recall
 
-Persistent memory across sessions via SQLite + Gemini embeddings. Always available in any project.
+Persistent memory across sessions via SQLite + local embeddings. Always available in any project.
 
 **Commands:**
 - `/recall-load` — list sessions for the current project
 - `/recall-load 1` — load session by number
 - `/recall-load "query"` — semantic search in the current project
 - `/recall-load --global "query"` — semantic search across all projects
-- `/recall-save` — save current session with Gemini summary + embeddings
+- `/recall-save` — save current session with summary + local embeddings
 
 **When to use proactively:**
 - At the start of a development session, if the user is resuming work, suggest `/recall-load`
@@ -197,7 +200,7 @@ Persistent memory across sessions via SQLite + Gemini embeddings. Always availab
 ~/.claude/plugins/cache/local/recall/1.0.0/hooks/db.py
 
 Key functions: get_db(), init_db(), get_project_id(), get_active_sessions(), multi_source_search().
-multi_source_search(conn, query, project_id=None, top_k_per_session=2) — project_id=None enables cross-project mode with score threshold 0.6.
+multi_source_search(conn, query, project_id=None, top_k_per_session=2) — hybrid search via RRF (FTS5 + cosine). project_id=None enables cross-project mode with score threshold 0.6.
 ```
 
 This eliminates the need to explain the plugin at the start of every session.
@@ -226,7 +229,7 @@ This bridges the gap between "session just opened" and "meaningful query availab
 # ... work ...
 
 # End of session
-/recall-save          # save with Gemini summary
+/recall-save          # save with summary + local embeddings
 ```
 
 > **Why save manually?** `SessionEnd` does not receive the conversation transcript — platform limitation. Without the transcript, generating embeddings and indexing chunks is impossible. Run `/recall-save` **before closing the session**, while the context is still available.
@@ -243,10 +246,10 @@ Results from real session tests (2026-03-19), project `blue-new-layout` (Next.js
 
 | Test | Result |
 |------|--------|
-| Reading `GEMINI_API_KEY` from shell config (`~/.zshrc`) | ✅ Worked without manual export |
-| Embedding generation with `gemini-embedding-001` | ✅ 3072 dimensions per chunk |
+| Local embedding generation with fastembed (`bge-small-en-v1.5`) | ✅ 384 dimensions per chunk, ~5ms per embedding |
 | Multi-source search across multiple sessions | ✅ Correct semantic scoring, relevant sessions prioritized |
 | Cross-project semantic search (`project_id=None`) | ✅ Returns chunks from all projects, sorted by score, filtered by threshold 0.6 |
+| Migration from Gemini 3072d → local 384d | ✅ 27/27 chunks re-indexed, quality preserved |
 
 ### Hooks
 
@@ -278,7 +281,7 @@ Sessions with low technical relevance ("casual conversations") do not need to be
 | macOS | ⚠️ Should work — same paths and shell config, not formally tested |
 | Windows | ❌ Not supported — path conventions, shell config files, and `sqlite-vec` binaries differ |
 
-Windows support would require at minimum: path handling via `pathlib` across all scripts, a `GEMINI_API_KEY` fallback that reads from Windows environment variables, and a verified `sqlite-vec` Windows build.
+Windows support would require at minimum: path handling via `pathlib` across all scripts and a verified `sqlite-vec` Windows build.
 
 > Contributions for macOS validation and Windows support are welcome.
 
@@ -289,20 +292,12 @@ Windows support would require at minimum: path handling via `pathlib` across all
 ### 1. Python dependencies
 
 ```bash
-pip install sqlite-vec google-genai
+pip install sqlite-vec fastembed
 ```
 
-### 2. GEMINI_API_KEY
+> `fastembed` uses ONNX runtime for local inference — no PyTorch required. The embedding model (`BAAI/bge-small-en-v1.5`, ~50MB) is downloaded automatically on first use.
 
-Add to `~/.profile` (available in all shells, including hooks):
-
-```bash
-export GEMINI_API_KEY=your_key_here
-```
-
-> `db.py` reads the key automatically from shell config files — no need to export manually in each session.
-
-### 3. Place the plugin files
+### 2. Place the plugin files
 
 Claude Code executes plugins from the `cache/local/` directory, not `marketplaces/local/`. Copy the plugin there:
 
@@ -311,7 +306,7 @@ mkdir -p ~/.claude/plugins/cache/local/recall/1.0.0
 cp -r /path/to/recall/. ~/.claude/plugins/cache/local/recall/1.0.0/
 ```
 
-### 4. Register in the local marketplace
+### 3. Register in the local marketplace
 
 Claude Code needs a marketplace manifest to discover local plugins. Create or update `~/.claude/plugins/marketplaces/local/.claude-plugin/marketplace.json`:
 
@@ -342,7 +337,7 @@ If the file doesn't exist yet, create it:
 
 If the file already exists, add the recall entry to the `plugins` array.
 
-### 5. Enable in settings.json
+### 4. Enable in settings.json
 
 Add `recall@local` to `enabledPlugins` in `~/.claude/settings.json`:
 
@@ -356,7 +351,7 @@ Add `recall@local` to `enabledPlugins` in `~/.claude/settings.json`:
 
 > If you already have other plugins enabled, just add `"recall@local": true` to the existing object.
 
-### 6. Verify
+### 5. Verify
 
 Restart Claude Code and run `/recall-load`. If it lists sessions (or says no sessions found for the project), the plugin is working.
 
@@ -379,11 +374,12 @@ recall/
 │   └── recall-load.md
 ├── hooks/
 │   ├── hooks.json
-│   ├── db.py              # Shared module: SQLite, embeddings, multi-source search
+│   ├── db.py              # Shared module: SQLite, FTS5, local embeddings (fastembed), hybrid search (RRF)
 │   ├── session-start.py
 │   ├── session-end.py
 │   ├── pre-compact.py
-│   └── recall_save_cmd.py # Pipeline for /recall-save
+│   ├── recall_save_cmd.py # Pipeline for /recall-save
+│   └── migrate_to_local.py # One-shot migration from Gemini to local embeddings
 ```
 
 ---
@@ -418,36 +414,55 @@ To clear the log: `rm ~/.claude/memory/debug.log`
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| `GEMINI_API_KEY` not available in hooks | Hooks run in non-interactive shell (doesn't load `~/.zshrc`) | `db.py` reads the key directly from config files |
 | Stale cache after editing marketplace | Claude Code uses `cache/local/` as the real source | Sync with `cp` after each edit |
 | `SessionEnd` doesn't generate summary | Platform doesn't pass transcript via stdin | Hook removed — `/recall-save` is the only save flow |
-| `SessionStart` failing silently | 10s timeout too short when script called Gemini | Script simplified (SQLite only) + timeout calibrated per hook in `hooks.json` |
 | Multi-source returning only last session | Sessions without `/recall-save` have 0 chunks | Expected — `/recall-load` filters for sessions with real summaries |
-| Plugin not found after renaming from `persistent-context` | `settings.json` still references the old plugin name | Update `enabledPlugins` in `~/.claude/settings.json`: replace `"persistent-context@local"` with `"recall@local"` |
+| First embedding call slow (~2-3s) | fastembed model loading on first use | Subsequent calls are ~5ms. Model is cached in memory for the process lifetime |
+
+---
+
+## Search pipeline
+
+The full search pipeline processes a query through five stages:
+
+```
+Query → Expansion → Embedding → Hybrid Search → Metadata Filter → Recency Re-rank
+```
+
+1. **Query expansion** — domain synonyms (PT/EN) expand search terms via OR groups
+2. **Embedding** — fastembed generates 384-dim vector locally
+3. **Hybrid search** — FTS5 keyword + sqlite-vec cosine, merged via RRF (k=60)
+4. **Metadata pre-filter** — optional `section_types` and `days_back` filters applied before vector search
+5. **Recency re-ranking** — blended score (80% similarity + 20% exponential decay, half-life 14 days) for cross-project ordering
+
+### Semantic chunking
+
+Sessions are chunked by logical section, not fixed word count:
+
+| Section | What it captures |
+|---------|-----------------|
+| `decisions` | Architectural and technical decisions |
+| `tasks_completed` | Work done in the session |
+| `tasks_pending` | Open work items |
+| `concepts` | Key technical concepts discussed |
+| `files_modified` | Files changed |
+| `notes` | Free-form context |
+
+Each chunk is prefixed with the session title for embedding context.
 
 ---
 
 ## Roadmap
 
-### Local embedding model
+### Configurable embedding model
 
-The plugin currently depends on the Gemini API for embedding generation — the only component that requires network and an API key. The long-term goal is to support local models as an alternative:
+The plugin uses `BAAI/bge-small-en-v1.5` (384 dims) via fastembed by default. Future improvements:
 
-- **[`nomic-embed-text`](https://ollama.com/library/nomic-embed-text)** via Ollama — 768 dimensions, fully offline
-- **[`mxbai-embed-large`](https://ollama.com/library/mxbai-embed-large)** via Ollama — 1024 dimensions, better quality
-- **`sentence-transformers`** via Python directly — no server dependency
+- **Model selection** — allow users to choose between fastembed models (e.g., `nomic-embed-text-v1.5` for 768 dims, `BAAI/bge-large-en-v1.5` for higher quality)
+- **Ollama integration** — support Ollama-hosted models as an alternative backend
+- **Auto-migration** — detect dimension mismatch and re-index automatically when switching models
 
-The switch would be configurable in `db.py`, keeping the `get_embedding()` interface identical. The SQLite database already supports any dimension via `sqlite-vec` — the only change would be re-indexing existing sessions when switching models.
-
-### API key configuration without system path
-
-Currently `GEMINI_API_KEY` is read directly from shell config files (`~/.profile`, `~/.zshrc`, etc.) — functional but coupled to the filesystem. The goal is to support more portable configuration options:
-
-- **Plugin config file** — e.g. `~/.claude/recall.json` with `{ "gemini_api_key": "..." }`
-- **Claude Code settings variable** — configure the key directly in Claude Code's `settings.json`
-- **Interactive prompt** — request the key on first run and store it securely
-
-> Contributions welcome. The entry point is the `_get_gemini_api_key()` function in `hooks/db.py`.
+> The entry point is the `get_embedding()` function and `EMBEDDING_DIM` constant in `hooks/db.py`.
 
 ---
 

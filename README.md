@@ -44,7 +44,11 @@ No cloud storage. No external database. No API calls. Everything lives in `~/.cl
 | | recall | Supermemory | Claude Code native memory |
 |--|--------|-------------|--------------------------|
 | **Storage** | Local SQLite | Cloud (SaaS) | Local files |
-| **Search** | Hybrid (semantic + keyword via RRF) | Semantic | Manual / selective |
+| **Search** | Hybrid (semantic + keyword via RRF) | Semantic only | Manual / selective |
+| **Chunking** | Semantic (by logical section) | Fixed-size | N/A |
+| **Metadata filtering** | ✅ section type + date range | ❌ | ❌ |
+| **Query expansion** | ✅ domain synonyms (PT/EN) | ❌ | ❌ |
+| **Recency re-ranking** | ✅ exponential decay | ❌ | ❌ |
 | **Cross-project** | ✅ `--global` flag | ✅ | ❌ |
 | **API key required** | No | Yes (service) | No |
 | **Cost** | Free | Paid plan | Free |
@@ -53,7 +57,7 @@ No cloud storage. No external database. No API calls. Everything lives in `~/.cl
 | **Claude Code integration** | Native (hooks + commands) | Via MCP | Native |
 | **Automatic saving** | ❌ manual `/recall-save` | ✅ | ❌ manual |
 
-**recall vs. Supermemory** — Supermemory is a managed service: easier to set up, but your data leaves your machine and you pay per usage. recall is 100% local and offline — embeddings are generated locally via fastembed (ONNX), no API calls, no cost.
+**recall vs. Supermemory** — Supermemory is a managed service with basic semantic search. recall goes further with a 5-stage search pipeline (query expansion → embedding → hybrid search → metadata pre-filter → recency re-rank), all running 100% locally with zero cost. Your data never leaves your machine.
 
 **recall vs. Claude Code native memory** — Claude Code's built-in memory system is selective and manual: you explicitly tell Claude what to remember, and it writes structured notes. recall captures full session context, indexes it semantically, and lets you search across sessions and projects. They complement each other well — use native memory for permanent facts, recall for session history.
 

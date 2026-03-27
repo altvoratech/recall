@@ -477,6 +477,20 @@ The plugin uses `BAAI/bge-small-en-v1.5` (384 dims) via fastembed by default. Fu
 
 > The entry point is the `get_embedding()` function and `EMBEDDING_DIM` constant in `hooks/db.py`.
 
+### Cloud storage backend (under analysis)
+
+The current local-only architecture limits recall to a single machine. Session history indexed on your desktop is not available on your laptop or in CI/CD environments. A cloud storage backend would enable cross-device access to your full session memory.
+
+Options being evaluated:
+
+- **Supabase (pgvector)** — PostgreSQL with vector search, free tier available, integrates well with existing project infrastructure
+- **Neon (pgvector)** — serverless Postgres with vector support, scales to zero
+- **Qdrant Cloud** — managed vector database, purpose-built for similarity search
+
+The goal is an optional sync layer: local SQLite remains the primary store (offline-first), with cloud as an opt-in replication target. Privacy-sensitive users keep everything local; others gain cross-device access.
+
+> This is under analysis and not yet planned for implementation.
+
 ---
 
 ## License

@@ -189,38 +189,19 @@ In `--global` mode, results are sorted by score and filtered by a minimum thresh
 
 ---
 
-## CLAUDE.md integration
+## Context injection
 
-To make Claude use the plugin automatically in any session without being instructed, add to `~/.claude/CLAUDE.md`:
+The plugin injects its instructions into Claude's context automatically via the `SessionStart` hook using `additionalContext`. Claude receives:
 
-```markdown
-## Plugin: recall
+- Available commands (`/recall-load`, `/recall-save`)
+- Number of sessions and most recent title for the current project
+- When to suggest loading or saving context
 
-Persistent memory across sessions via SQLite + local embeddings. Always available in any project.
+**No CLAUDE.md configuration is required.** The plugin is self-sufficient — install it and it works.
 
-**Commands:**
-- `/recall-load` — list sessions for the current project
-- `/recall-load 1` — load session by number
-- `/recall-load "query"` — semantic search in the current project
-- `/recall-load --global "query"` — semantic search across all projects
-- `/recall-save` — save current session with summary + local embeddings
+### Optional: CLAUDE.md customization
 
-**When to use proactively:**
-- At the start of a development session, if the user is resuming work, suggest `/recall-load`
-- If the user mentions something that may have context in previous sessions, use `/recall-load --global "query"` to search
-
-**Implementation path:**
-~/.claude/plugins/cache/local/recall/1.0.0/hooks/db.py
-
-Key functions: get_db(), init_db(), get_project_id(), get_active_sessions(), multi_source_search().
-multi_source_search(conn, query, project_id=None, top_k_per_session=2) — hybrid search via RRF (FTS5 + cosine). project_id=None enables cross-project mode with score threshold 0.6.
-```
-
-This eliminates the need to explain the plugin at the start of every session.
-
-**Tip — automatic context loading via CLAUDE.md:**
-
-Claude Code always reads `CLAUDE.md` before starting any session. You can use this to make Claude run `/recall-load` automatically, without waiting for you to ask:
+If you want to customize Claude's behavior beyond the defaults (e.g., auto-load context on first message), you can still add instructions to `~/.claude/CLAUDE.md`:
 
 ```markdown
 At the start of each session, analyze the user's first message and run
@@ -228,7 +209,7 @@ At the start of each session, analyze the user's first message and run
 they are asking — before responding.
 ```
 
-This bridges the gap between "session just opened" and "meaningful query available" — the reason SessionStart doesn't auto-inject context by default.
+This bridges the gap between "session just opened" and "meaningful query available" — the reason SessionStart doesn't auto-load context by default.
 
 ---
 
@@ -488,6 +469,19 @@ Options being evaluated:
 - **Qdrant Cloud** — managed vector database, purpose-built for similarity search
 
 The goal is an optional sync layer: local SQLite remains the primary store (offline-first), with cloud as an opt-in replication target. Privacy-sensitive users keep everything local; others gain cross-device access.
+
+> This is under analysis and not yet planned for implementation.
+
+### Cross-platform support (under analysis)
+
+recall is currently a Claude Code plugin, tied to the Claude Code hooks and commands system. The core engine (`db.py`) is platform-agnostic Python — SQLite, fastembed, and the hybrid search pipeline have no dependency on Claude Code. This opens the door for:
+
+- **Other AI CLIs** — adapt the integration layer for Cursor, Aider, Continue, or other coding assistants
+- **IDE extensions** — VS Code / JetBrains plugins that expose recall's search and save capabilities
+- **Standalone CLI** — a `recall` command-line tool for querying session memory independently
+- **API server** — a lightweight FastAPI service exposing search endpoints for any client
+
+The architecture would separate the core engine (search, indexing, chunking) from the integration layer (hooks, commands, context injection), making it possible to plug recall into any environment that supports Python.
 
 > This is under analysis and not yet planned for implementation.
 

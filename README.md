@@ -55,11 +55,20 @@ No cloud storage. No external database. No API calls. Everything lives in `~/.cl
 | **Data privacy** | 100% local | Sent to cloud | 100% local |
 | **Network required** | No (fully offline) | Yes | No |
 | **Claude Code integration** | Native (hooks + commands) | Via MCP | Native |
-| **Automatic saving** | ❌ manual `/recall-save` | ✅ | ❌ manual |
+| **Automatic saving** | ✅ intentionally manual | ✅ | ❌ manual |
+| **Embedding quality** | High (curated summaries) | Low (raw content) | N/A |
 
 **recall vs. Supermemory** — Supermemory is a managed service with basic semantic search. recall goes further with a 5-stage search pipeline (query expansion → embedding → hybrid search → metadata pre-filter → recency re-rank), all running 100% locally with zero cost. Your data never leaves your machine.
 
 **recall vs. Claude Code native memory** — Claude Code's built-in memory system is selective and manual: you explicitly tell Claude what to remember, and it writes structured notes. recall captures full session context, indexes it semantically, and lets you search across sessions and projects. They complement each other well — use native memory for permanent facts, recall for session history.
+
+### Why manual saving is a feature, not a limitation
+
+The `/recall-save` flow is intentionally manual. When you run it, **Claude itself summarizes the session** — extracting decisions, tasks, concepts, and notes into a structured JSON. This curated summary is then chunked by logical section and embedded.
+
+This produces **dramatically richer embeddings** than auto-saving raw conversation transcripts. A raw transcript contains tool outputs, stack traces, code diffs, and verbose back-and-forth — noise that dilutes embedding quality. A curated summary like `"Decided to migrate from Gemini to fastembed for zero-cost local embeddings"` generates a focused, semantically dense vector that surfaces precisely when relevant.
+
+Auto-save systems (like Supermemory) index everything — including noise. recall indexes only what matters, because the model already did the filtering for you.
 
 ---
 

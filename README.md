@@ -159,7 +159,7 @@ The `timeout` in `hooks.json` is how long Claude Code waits for a script to fini
 |------|----------|
 | `SessionStart` | Lists available sessions for the current project. Prompts to use `/recall-load`. |
 | `UserPromptSubmit` | **Auto-search**: runs cross-project hybrid search on every user message (4+ words). Injects relevant chunks via `additionalContext` when score > 0.75. Errors shown via `systemMessage` (visible to user, not to Claude). Zero-latency (local embeddings + SQLite). |
-| `Stop` | **Save reminder**: counts user messages in the transcript. When threshold is reached (default: 20), injects `additionalContext` suggesting `/recall-save`. Non-blocking — just a suggestion. |
+| `Stop` | **Save reminder**: counts user messages in the transcript. First reminder at 20 messages, then every 20 more (40, 60, 80...). Shows `systemMessage` suggesting `/recall-save`. Non-blocking, per-session state. |
 | `SessionEnd` | No-op. The only save flow is manual `/recall-save`. |
 | `PreCompact` | Reinjects critical context via multi-source search before context window compression. |
 

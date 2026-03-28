@@ -465,6 +465,29 @@ Each chunk is prefixed with the session title for embedding context.
 
 ## Roadmap
 
+### Operational data in session summaries (planned)
+
+The current JSON structure captures decisions, tasks, and concepts — but misses operational data like URLs, ports, API keys, and endpoints. This causes recall to fail when asked "what's the URL for service X?" because that data was never indexed.
+
+**Planned changes:**
+- Add `operational` section to the session JSON schema (endpoints, credentials, infrastructure)
+- Update `chunk_structured` in `db.py` to index the new field as a dedicated chunk with `section_type: "operational"`
+- Update `/recall-save` skill instructions to guide the model to capture operational data
+
+**Example of the new field:**
+```json
+{
+  "operational": {
+    "endpoints": ["https://editorial-manager.blueprintblog.tech/api/v1/external/knowledge"],
+    "credentials": ["x-api-key: sk_..."],
+    "ports": ["9000 webhook", "3001 blog", "5432 postgres"],
+    "infrastructure": ["VPS Contabo 84.247.131.216", "Cloudflare DNS + Origin Rules"]
+  }
+}
+```
+
+> The entry points are `chunk_structured()` in `hooks/db.py` and `commands/recall-save.md`.
+
 ### Configurable embedding model
 
 The plugin uses `BAAI/bge-small-en-v1.5` (384 dims) via fastembed by default. Future improvements:

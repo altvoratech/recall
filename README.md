@@ -223,15 +223,22 @@ The search runs entirely locally (fastembed + SQLite) and completes in milliseco
 ## Typical workflow
 
 ```
-# Start of session
+# Start of session — just start working
+# The UserPromptSubmit hook automatically injects relevant context
+# from previous sessions as you type. No manual action needed.
+
+# Use /recall-load only when you want to explicitly browse or search:
 /recall-load          # see available sessions
-/recall-load 1        # load the most recent
+/recall-load 1        # load a specific session's full summary
+/recall-load "query"  # targeted semantic search
 
 # ... work ...
 
 # End of session
 /recall-save          # save with summary + local embeddings
 ```
+
+> **No `/recall-load` required at session start.** The `UserPromptSubmit` hook automatically searches and injects relevant context from all indexed sessions every time you send a message. `/recall-load` is now an optional tool for explicit browsing or deep dives into specific sessions.
 
 > **Why save manually?** `SessionEnd` does not receive the conversation transcript — platform limitation. Without the transcript, generating embeddings and indexing chunks is impossible. Run `/recall-save` **before closing the session**, while the context is still available.
 

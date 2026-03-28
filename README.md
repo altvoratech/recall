@@ -14,11 +14,12 @@
 
 ## Why recall
 
-Claude Code forgets everything when you close a session. recall solves this with a local-first pipeline:
+Claude Code forgets everything when you close a session. recall solves this with a local-first pipeline that **proactively injects relevant context** into every conversation:
 
-1. `/recall-save` — Claude generates a structured summary, chunks it, and indexes embeddings + FTS5 locally in SQLite
-2. `/recall-load` — hybrid search (semantic + keyword) over indexed sessions using Reciprocal Rank Fusion (RRF)
-3. **PreCompact hook** — automatically reinjects critical context before Claude's context window compresses
+1. **`UserPromptSubmit` hook** — every message (4+ words) triggers a cross-project hybrid search. If relevant chunks are found (score > threshold), they're injected into Claude's context automatically via `additionalContext` — before the model processes your message
+2. `/recall-save` — Claude generates a structured summary, chunks it, and indexes embeddings + FTS5 locally in SQLite
+3. `/recall-load` — manual hybrid search (semantic + keyword) over indexed sessions using Reciprocal Rank Fusion (RRF)
+4. **PreCompact hook** — automatically reinjects critical context before Claude's context window compresses
 
 No cloud storage. No external database. No API calls. Everything lives in `~/.claude/memory/`.
 
@@ -55,6 +56,7 @@ No cloud storage. No external database. No API calls. Everything lives in `~/.cl
 | **Data privacy** | 100% local | Sent to cloud | 100% local |
 | **Network required** | No (fully offline) | Yes | No |
 | **Claude Code integration** | Native (hooks + commands) | Via MCP | Native |
+| **Auto context injection** | ✅ UserPromptSubmit hook | ✅ MCP middleware | ❌ |
 | **Automatic saving** | ✅ intentionally manual | ✅ | ❌ manual |
 | **Embedding quality** | High (curated summaries) | Low (raw content) | N/A |
 
@@ -155,7 +157,8 @@ The `timeout` in `hooks.json` is how long Claude Code waits for a script to fini
 
 | Hook | Behavior |
 |------|----------|
-| `SessionStart` | Lists available sessions for the current project. Prompts to use `/recall-load`. Does not inject context automatically (avoids latency + cost). |
+| `SessionStart` | Lists available sessions for the current project. Prompts to use `/recall-load`. |
+| `UserPromptSubmit` | **Auto-search**: runs cross-project hybrid search on every user message (4+ words). Injects relevant chunks via `additionalContext` when score exceeds threshold. Zero-latency (local embeddings + SQLite). |
 | `SessionEnd` | No-op. The only save flow is manual `/recall-save`. |
 | `PreCompact` | Reinjects critical context via multi-source search before context window compression. |
 
@@ -191,25 +194,29 @@ In `--global` mode, results are sorted by score and filtered by a minimum thresh
 
 ## Context injection
 
-The plugin injects its instructions into Claude's context automatically via the `SessionStart` hook using `additionalContext`. Claude receives:
+The plugin injects context at two levels:
 
+### 1. Session start (SessionStart hook)
+
+Injects plugin instructions via `additionalContext`:
 - Available commands (`/recall-load`, `/recall-save`)
 - Number of sessions and most recent title for the current project
 - When to suggest loading or saving context
 
+### 2. Every message (UserPromptSubmit hook)
+
+**This is the core feature.** Every user message (4+ words) triggers an automatic cross-project hybrid search:
+
+1. Hook receives the user's prompt via stdin
+2. Runs `multi_source_search` with `project_id=None` (cross-project)
+3. If best result scores above threshold (default: 0.7), injects relevant chunks via `additionalContext`
+4. If no relevant results, exits silently — zero overhead
+
+This means Claude **proactively receives context from previous sessions** without the user needing to run `/recall-load`. Short messages ("yes", "ok", "do it") are filtered out (< 4 words) and naturally score low in the vector search, avoiding noise.
+
+The search runs entirely locally (fastembed + SQLite) and completes in milliseconds — no perceptible delay.
+
 **No CLAUDE.md configuration is required.** The plugin is self-sufficient — install it and it works.
-
-### Optional: CLAUDE.md customization
-
-If you want to customize Claude's behavior beyond the defaults (e.g., auto-load context on first message), you can still add instructions to `~/.claude/CLAUDE.md`:
-
-```markdown
-At the start of each session, analyze the user's first message and run
-/recall-load "query" with a 5-10 word semantic query derived from what
-they are asking — before responding.
-```
-
-This bridges the gap between "session just opened" and "meaningful query available" — the reason SessionStart doesn't auto-load context by default.
 
 ---
 
@@ -250,6 +257,7 @@ Results from real session tests (2026-03-19), project `blue-new-layout` (Next.js
 | Hook | Test | Result |
 |------|------|--------|
 | `SessionStart` | Session listing for project | ✅ Sessions displayed correctly |
+| `UserPromptSubmit` | Cross-project auto-search on user messages | ✅ Relevant chunks injected via additionalContext |
 | `PreCompact` | Autocompact fired immediately after hook fix | ✅ Hook executed; returned silent (no previously indexed sessions — expected behavior) |
 | `SessionEnd` | Hook removed — no-op | ✅ No ghost sessions in database |
 
@@ -259,7 +267,8 @@ Results from real session tests (2026-03-19), project `blue-new-layout` (Next.js
 |------------|-------|--------|
 | `PreCompact` does not inject context on first session | No previously indexed chunks — multi-source returns empty | Low — Claude Code's native context covers the current session |
 | `SessionEnd` does not auto-index chunks | Platform does not pass transcript via stdin | None — fallback removed, `/recall-save` is the only flow |
-| `SessionStart` does not auto-inject context | No search query available at session start | Low — intentional design; `/recall-load` with a specific query is more precise |
+| `UserPromptSubmit` skips short messages | Messages under 4 words filtered out | By design — "sim", "ok" don't produce useful search queries |
+| `UserPromptSubmit` may miss if save quality is low | Search quality depends on how rich the saved summaries are | Medium — include operational data (URLs, ports, endpoints) in saves |
 
 ### Note on the RAG
 
@@ -372,6 +381,7 @@ recall/
 │   ├── session-start.py
 │   ├── session-end.py
 │   ├── pre-compact.py
+│   ├── user-prompt-search.py  # Auto-search on every user message (UserPromptSubmit)
 │   ├── recall_save_cmd.py # Pipeline for /recall-save
 │   └── migrate_to_local.py # One-shot migration from Gemini to local embeddings
 ```

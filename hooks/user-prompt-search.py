@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db import get_db, init_db, get_project_id, multi_source_search
 
 
-SCORE_THRESHOLD = 0.7
+SCORE_THRESHOLD = 0.75
 MIN_WORDS = 4
 MAX_CHUNKS = 3
 MAX_CHUNK_LEN = 400
@@ -36,7 +36,10 @@ def main():
         # Cross-project: busca em todas as sessões indexadas
         results = multi_source_search(conn, prompt, project_id=None, top_k_per_session=2)
         conn.close()
-    except Exception:
+    except Exception as e:
+        print(json.dumps({
+            "systemMessage": f"[recall] hook falhou: {e}"
+        }))
         sys.exit(0)
 
     # Filtra por threshold

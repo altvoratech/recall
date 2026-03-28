@@ -158,7 +158,7 @@ The `timeout` in `hooks.json` is how long Claude Code waits for a script to fini
 | Hook | Behavior |
 |------|----------|
 | `SessionStart` | Lists available sessions for the current project. Prompts to use `/recall-load`. |
-| `UserPromptSubmit` | **Auto-search**: runs cross-project hybrid search on every user message (4+ words). Injects relevant chunks via `additionalContext` when score exceeds threshold. Zero-latency (local embeddings + SQLite). |
+| `UserPromptSubmit` | **Auto-search**: runs cross-project hybrid search on every user message (4+ words). Injects relevant chunks via `additionalContext` when score > 0.75. Errors shown via `systemMessage` (visible to user, not to Claude). Zero-latency (local embeddings + SQLite). |
 | `SessionEnd` | No-op. The only save flow is manual `/recall-save`. |
 | `PreCompact` | Reinjects critical context via multi-source search before context window compression. |
 
@@ -209,7 +209,7 @@ Injects plugin instructions via `additionalContext`:
 
 1. Hook receives the user's prompt via stdin
 2. Runs `multi_source_search` with `project_id=None` (cross-project)
-3. If best result scores above threshold (default: 0.7), injects relevant chunks via `additionalContext`
+3. If best result scores above threshold (default: 0.75), injects relevant chunks via `additionalContext`
 4. If no relevant results, exits silently — zero overhead
 
 This means Claude **proactively receives context from previous sessions** without the user needing to run `/recall-load`. Short messages ("yes", "ok", "do it") are filtered out (< 4 words) and naturally score low in the vector search, avoiding noise.

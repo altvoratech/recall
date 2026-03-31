@@ -59,6 +59,10 @@ Exiba:
 
 ## Notas
 
-- Se já existe JSON desta sessão (mesmo sessionId), **sobrescreve**
+- Se já existe JSON desta sessão (mesmo sessionId), faz **merge inteligente**:
+  - Arrays (`decisions`, `tasks_completed`, `concepts`, `files_modified`): union + deduplica
+  - `tasks_pending`: union + deduplica, depois remove items que migraram para `tasks_completed`
+  - Strings (`title`, `notes`): novo substitui o existente
+- A re-indexação de chunks roda em transação atômica (`BEGIN IMMEDIATE`)
 - Se o projeto já tem 3 sessões ativas, a mais antiga vai para `archived/`
 - O resumo é escrito pelo Claude — sem parsing automático, contexto livre

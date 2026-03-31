@@ -1,11 +1,11 @@
 ---
-name: memory-status
+name: recall-status
 description: Mostra status atual da memória persistente (SQLite + sessões do projeto)
 argument-hint: "[sem argumentos]"
 allowed-tools: [Bash]
 ---
 
-# /memory-status
+# /recall-status
 
 Exibe estatísticas do banco de memória e sessões do projeto atual.
 
@@ -16,7 +16,7 @@ Execute via Bash:
 ```bash
 python3 -c "
 import sys, os
-sys.path.insert(0, '$HOME/.claude/plugins/cache/local/persistent-context/1.0.0/hooks')
+sys.path.insert(0, '$HOME/.claude/plugins/cache/local/recall/1.0.0/hooks')
 from db import get_db, init_db, get_project_id, get_active_sessions, DB_PATH, ARCHIVE_DIR
 from pathlib import Path
 import json
@@ -26,7 +26,7 @@ project_id = get_project_id(cwd)
 project_slug = project_id.split('/')[-1].replace('.git', '')
 
 if not DB_PATH.exists():
-    print('Nenhuma memória encontrada. Use /memory-save para criar.')
+    print('Nenhuma memória encontrada. Use /recall-save para criar.')
     exit()
 
 conn = get_db()
@@ -56,18 +56,16 @@ conn.close()
 ## Saída esperada
 
 ```
-Projeto: demo-script
-Sessoes ativas: 3 / 3
-Sessoes arquivadas: 2
-Total chunks indexados: 9
-Banco: /home/user/.claude/memory/memory.db (48 KB)
+Projeto: blog
+Sessoes ativas: 2 / 3
+Sessoes arquivadas: 0
+Total chunks indexados: 15
+Banco: /home/user/.claude/memory/memory.db (256 KB)
 
-  1. [3 chunks] Correções do persistent-context: GEMINI_API_KEY e multi-source
-     arquivo: demo-script_2026-03-13.json
-  2. [2 chunks] Redesign com SQLite + Gemini
-     arquivo: demo-script_2026-03-12.json
-  3. [sem resumo] Sessão 2026-03-11 — sem resumo (use /memory-save)
-     arquivo: demo-script_2026-03-11_fallback.json
+  1. [8 chunks] Header com Luna 2.0, merge inteligente no recall-save
+     arquivo: blog_2026-03-31.json
+  2. [3 chunks] Análise do projeto blog e configuração do Storybook MCP
+     arquivo: blog_2026-03-30.json
 ```
 
 ## Sem memória
@@ -75,5 +73,5 @@ Banco: /home/user/.claude/memory/memory.db (48 KB)
 Se o banco não existir, informa e orienta:
 
 ```
-Nenhuma memória encontrada. Use /memory-save para criar.
+Nenhuma memória encontrada. Use /recall-save para criar.
 ```

@@ -411,28 +411,16 @@ def save_session_metadata(
 def index_chunks(conn: sqlite3.Connection, session_id: str, text: str, precomputed_chunks=None):
     """Chunks text, generates embeddings, stores in sqlite-vec and FTS5.
 
+    All operations (DELETE old + INSERT new) run in a single transaction
+    for atomicity — the UserPromptSubmit hook never sees partial state.
+
     precomputed_chunks can be:
       - list[str]: plain text chunks (backward compatible)
       - list[tuple[str, str]]: (text, section_type) from chunk_structured
       - None: falls back to chunk_text(text)
     """
-    # Remove chunks anteriores desta sessão
-    old_chunks = conn.execute(
-        "SELECT id, content FROM chunks WHERE session_id = ?", (session_id,)
-    ).fetchall()
-    for c in old_chunks:
-        conn.execute("DELETE FROM chunk_embeddings WHERE chunk_id = ?", (c['id'],))
-        try:
-            conn.execute(
-                "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', ?, ?)",
-                (c['id'], c['content'])
-            )
-        except Exception:
-            pass
-    conn.execute("DELETE FROM chunks WHERE session_id = ?", (session_id,))
-    conn.commit()
-
-    # Normalize chunks to (text, section_type) tuples
+    # Normalize chunks to (text, section_type) tuples BEFORE transaction
+    # (embedding generation is slow, do it outside the lock)
     if precomputed_chunks is None:
         raw_chunks = [(c, None) for c in chunk_text(text)]
     elif precomputed_chunks and isinstance(precomputed_chunks[0], tuple):
@@ -440,25 +428,50 @@ def index_chunks(conn: sqlite3.Connection, session_id: str, text: str, precomput
     else:
         raw_chunks = [(c, None) for c in precomputed_chunks]
 
-    for i, (chunk_content, section_type) in enumerate(raw_chunks):
-        cursor = conn.execute(
-            "INSERT INTO chunks (session_id, content, chunk_index, section_type) VALUES (?, ?, ?, ?)",
-            (session_id, chunk_content, i, section_type)
-        )
-        chunk_id = cursor.lastrowid
-        embedding = get_embedding(chunk_content)
-        conn.execute(
-            "INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
-            (chunk_id, serialize_vector(embedding))
-        )
-        try:
-            conn.execute(
-                "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
-                (chunk_id, chunk_content)
+    # Pre-compute embeddings outside transaction (CPU-intensive)
+    embeddings = [get_embedding(chunk_content) for chunk_content, _ in raw_chunks]
+
+    # Single atomic transaction: DELETE old + INSERT new
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Remove chunks anteriores desta sessão
+        old_chunks = conn.execute(
+            "SELECT id, content FROM chunks WHERE session_id = ?", (session_id,)
+        ).fetchall()
+        for c in old_chunks:
+            conn.execute("DELETE FROM chunk_embeddings WHERE chunk_id = ?", (c['id'],))
+            try:
+                conn.execute(
+                    "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', ?, ?)",
+                    (c['id'], c['content'])
+                )
+            except Exception:
+                pass
+        conn.execute("DELETE FROM chunks WHERE session_id = ?", (session_id,))
+
+        # Insert new chunks + embeddings + FTS5
+        for i, ((chunk_content, section_type), embedding) in enumerate(zip(raw_chunks, embeddings)):
+            cursor = conn.execute(
+                "INSERT INTO chunks (session_id, content, chunk_index, section_type) VALUES (?, ?, ?, ?)",
+                (session_id, chunk_content, i, section_type)
             )
-        except Exception:
-            pass
-    conn.commit()
+            chunk_id = cursor.lastrowid
+            conn.execute(
+                "INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
+                (chunk_id, serialize_vector(embedding))
+            )
+            try:
+                conn.execute(
+                    "INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)",
+                    (chunk_id, chunk_content)
+                )
+            except Exception:
+                pass
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # ─── Multi-source search ─────────────────────────────────────────────────────

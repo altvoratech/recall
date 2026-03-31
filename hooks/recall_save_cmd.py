@@ -2,6 +2,8 @@
 """
 recall-save command pipeline — called by /recall-save.
 Saves session JSON, indexes chunks with local embeddings (fastembed).
+Supports intelligent merge: when a session already exists for the same day,
+merges arrays (union + dedup) instead of overwriting.
 """
 
 import argparse
@@ -13,8 +15,51 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from db import (
     get_db, init_db, get_project_id, rotate_sessions,
-    save_session_metadata, index_chunks, chunk_structured, MEMORY_DIR
+    save_session_metadata, index_chunks, chunk_structured, MEMORY_DIR,
+    debug_log
 )
+
+
+def _deduplicate_list(items: list) -> list:
+    """Deduplicates a list preserving order. Uses normalized string comparison."""
+    seen = set()
+    result = []
+    for item in items:
+        key = item.strip().lower() if isinstance(item, str) else str(item)
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
+
+
+def _merge_summaries(existing: dict, new: dict) -> dict:
+    """Merges two session summaries intelligently.
+
+    - List fields: union + deduplicate (new items appended after existing)
+    - String fields (title, notes): new replaces existing
+    - tasks_pending: items that appear in new tasks_completed are removed
+    """
+    merged = {}
+
+    # String fields: new wins
+    merged['title'] = new.get('title') or existing.get('title', '')
+    merged['notes'] = new.get('notes') or existing.get('notes', '')
+
+    # List fields: union + dedup
+    list_fields = ['decisions', 'tasks_completed', 'files_modified', 'concepts']
+    for field in list_fields:
+        combined = (existing.get(field) or []) + (new.get(field) or [])
+        merged[field] = _deduplicate_list(combined)
+
+    # tasks_pending: merge then remove items that moved to tasks_completed
+    pending_combined = (existing.get('tasks_pending') or []) + (new.get('tasks_pending') or [])
+    pending_deduped = _deduplicate_list(pending_combined)
+
+    # Remove resolved tasks (present in tasks_completed)
+    completed_keys = {t.strip().lower() for t in merged['tasks_completed']}
+    merged['tasks_pending'] = [t for t in pending_deduped if t.strip().lower() not in completed_keys]
+
+    return merged
 
 
 def main():
@@ -31,8 +76,6 @@ def main():
         sys.exit(1)
 
     project_id = get_project_id(args.cwd)
-    title = summary.get('title', 'Sessão sem título')
-
     project_slug = project_id.split('/')[-1].replace('.git', '')
     date_str = datetime.now().strftime('%Y-%m-%d')
 
@@ -42,13 +85,28 @@ def main():
     conn = get_db()
     init_db(conn)
 
-    # Verifica se já existe sessão com este ID (sobrescreve)
+    # Verifica se já existe sessão com este ID
     existing = conn.execute(
         "SELECT filename FROM sessions WHERE id = ?", (session_id,)
     ).fetchone()
 
     if existing:
         filename = existing['filename']
+
+        # ── Merge inteligente: ler JSON existente e fazer merge dos arrays ──
+        json_path = MEMORY_DIR / filename
+        if json_path.exists():
+            try:
+                existing_data = json.loads(json_path.read_text())
+                existing_summary = existing_data.get('summary', {})
+                summary = _merge_summaries(existing_summary, summary)
+                debug_log('recall_save', f'Merged session {session_id}: '
+                          f'{len(summary.get("decisions", []))} decisions, '
+                          f'{len(summary.get("tasks_completed", []))} completed, '
+                          f'{len(summary.get("tasks_pending", []))} pending')
+            except (json.JSONDecodeError, KeyError) as e:
+                debug_log('recall_save', f'Merge failed, overwriting: {e}')
+                # Fallback: usa o summary novo como está
     else:
         rotate_sessions(conn, project_id, max_sessions=3)
         # Gera filename único — verifica colisão com sessões do mesmo dia
@@ -63,7 +121,9 @@ def main():
         else:
             filename = base_filename
 
-    # Salva JSON
+    title = summary.get('title', 'Sessão sem título')
+
+    # Salva JSON consolidado (merged ou novo)
     session_data = {
         'version': '2.0',
         'sessionId': session_id,
